@@ -1,0 +1,685 @@
+---
+title: "Nasal microbiome"
+output: html_notebook
+author: Yue Zhao
+---
+
+#### packages
+```{r message=FALSE}
+#load packages
+library(ggplot2)
+library(DESeq2)
+library(pheatmap)
+require(glmnet)
+require(randomForest)
+require(ROCR)
+require(DESeq)
+library(sva)
+require(caret)
+require(PathoStat)
+require(R.utils)
+require(caret)
+require(vegan)
+require(stringr)
+sourceDirectory("/Users/yuezhao/Desktop/projects/R_lib_jason/", modifiedOnly=TRUE)
+```
+
+#### define functions
+```{r}
+# transform cpm counts to presence-absence matrix
+GET_PAM <- function(df) {
+  for (i in 1:nrow(df)){
+    df[i,] <- as.numeric(df[i,] > 0)
+  }
+  return(df)
+}
+
+
+# Given PAM and disease/control annotation, do Chi-square test for each row of PAM
+Chisq_Test_Pam <- function(pam, label.vec.num) {
+  df.output <- NULL
+  for (i in 1:nrow(pam)){
+    # remove zero-variance rows
+    if (sum(pam[i,] == 1) == length(label.vec.num) | sum(pam[i,] == 0) == length(label.vec.num)){
+      next
+    }
+    tmp.result <- chisq.test(pam[i,], label.vec.num, correct=FALSE)
+    if (tmp.result$p.value <= 0.05){
+      df.output <- rbind(df.output, c(rownames(pam)[i], round(as.numeric(tmp.result$p.value), 4)))
+    }
+  }
+  colnames(df.output) <- c("Name", "P-value")
+  return(df.output)
+}
+
+# Do chi-square test for a list of counts
+Chisq_Test_List <- function(df.list, label.vec.num){
+  output.list <- list()
+  for (i in 1:length(df.list)){
+    df.pam <- GET_PAM(df.list[[i]])
+    df.chisq.result <- Chisq_Test_Pam(df.pam, label.vec.num)
+    output.list[[i]] <- df.chisq.result
+  }
+  names(output.list) <- names(df.list)
+  return(output.list)
+}
+
+
+
+
+# Prevalence
+Get_Prevalence <- function(count.list, label.num.vec, sum.cutoff = 0.1, fold.cutoff = 1.5){
+  pre.list.cancer <- lapply(count.list, function(y) 
+    apply(as.matrix(y), 1, function(x) 
+      round(sum(x[which(label.num.vec == 1)] != 0)/sum(label.num.vec == 1), 2)))
+  pre.list.control <- lapply(count.list, function(y) 
+    apply(as.matrix(y), 1, function(x) 
+      round(sum(x[which(label.num.vec == 0)] != 0)/sum(label.num.vec == 0), 2)))
+  pre.list <- list()
+  for (i in 1:length(pre.list.cancer)){
+    pre.list[[i]] <- data.frame(pre.list.cancer[[i]], pre.list.control[[i]])
+    colnames(pre.list[[i]]) <- c("cancer", "control")
+  }
+  names(pre.list) <- names(count.list)
+
+  #filter out low prevalence and low variance taxon id
+  pre.list.diff <- lapply(pre.list, function(x)
+  x[apply(as.matrix(x), 1, function(y)
+  sum(y) >= sum.cutoff & max(y)/min(y) >= fold.cutoff),])
+
+  # get the features!
+  feature.list <- list()
+  for (i in 1:length(pre.list.cancer)){
+     feature.list[[i]] <- rownames(count.list[[i]])[which(rownames(count.list[[i]]) %in% rownames(pre.list.diff[[i]]))]
+  }
+  names(feature.list) <- names(count.list)
+  output.list <- list(all = pre.list, diff = pre.list.diff, feature = feature.list)
+  return(output.list)
+}
+
+# Mean Relative Abundance
+Get_RA <- function(ra.list, label.num.vec, sum.cutoff = 0.01, fold.cutoff = 1.5){
+  pre.list.cancer <- lapply(ra.list, function(y) 
+    apply(as.matrix(y), 1, function(x) 
+      round(sum(x[which(label.num.vec == 1)]),2) / sum(label.num.vec == 1)))
+  pre.list.control <- lapply(ra.list, function(y) 
+    apply(as.matrix(y), 1, function(x) 
+      round(sum(x[which(label.num.vec == 0)]),2) / sum(label.num.vec == 0)))
+  pre.list <- list()
+  for (i in 1:length(pre.list.cancer)){
+    pre.list[[i]] <- data.frame(pre.list.cancer[[i]], pre.list.control[[i]])
+    colnames(pre.list[[i]]) <- c("cancer", "control")
+  }
+  names(pre.list) <- names(ra.list)
+
+  #filter out low prevalence and low variance taxon id
+  pre.list.diff <- lapply(pre.list, function(x)
+  x[apply(as.matrix(x), 1, function(y)
+  sum(y) >= sum.cutoff & max(y)/min(y) >= fold.cutoff),])
+
+  # get the features!
+  feature.list <- list()
+  for (i in 1:length(pre.list.cancer)){
+     feature.list[[i]] <- rownames(ra.list[[i]])[which(rownames(ra.list[[i]]) %in% rownames(pre.list.diff[[i]]))]
+  }
+  names(feature.list) <- names(ra.list)
+  output.list <- list(all = pre.list, diff = pre.list.diff, feature = feature.list)
+  return(output.list)
+}
+
+
+
+
+
+# plot heatmap with selected features
+
+#species level
+selected.feature.species <- which(rownames(count_list.cpm[[1]]) %in% rownames(prevalence_dfList_filtered[[1]]))
+plot_pheatmap(count_list.cpm[[1]][selected.feature.species,], cancerVec, colorGroup = c(Cancer = "red", Control = "green" ), log2Trans = T, title = "species level")
+
+
+# DE analysis
+DeAnalysis <- function(df, treatments, gender){
+  coldata <- data.frame(condition = treatments, gender = gender)
+  rownames(coldata) <- colnames(df)
+  dds <- DESeqDataSetFromMatrix(countData = df,
+                                colData = coldata,
+                                design = ~ condition + gender)
+#pre-filter
+  dds <- dds[rowSums(counts(dds)) > 1,]
+
+#calculate the factor2
+  dds <- estimateSizeFactors(dds)
+
+#DE africa
+  dds <- DESeq(dds)
+  res <- results(dds, contrast=c("condition","Cancer","Control"))
+  res.ordered <- res[order(res$padj),]
+  return(res.ordered)
+}
+
+
+# get differential expressed genes with a padj cut-off from de output
+GetDEG <- function(de.result, padj.cut.off = 1e-2){
+    res.sig <- subset(de.result, padj < padj.cut.off)
+    return(rownames(res.sig))
+}
+
+
+
+
+
+```
+
+### Lahey
+Note: This batch is in output_161007
+```{r}
+#metadata
+meta.lahey.batch.1 <- read.table("lahey/data/Clinical_Nasal.txt", sep = "\t", stringsAsFactors = F)
+colnames(meta.lahey.batch.1) <- meta.lahey.batch.1[1,]
+meta.lahey.batch.1 <- meta.lahey.batch.1[2:39,1:26]
+rownames(meta.lahey.batch.1) <- meta.lahey.batch.1$`Study ID`
+
+
+#QC
+qc.lahey.batch.1 <- read.table("lahey/data/QC_lahey.txt", header = T, stringsAsFactors = F, sep = "\t")
+colnames(qc.lahey.batch.1) <- c("Sample.Name", "Dups", "GC", "M.Seqs")
+qc.lahey.batch.1$Sample.Name <- str_match(qc.lahey.batch.1$Sample.Name, "([0-9]+)_")[,2]
+
+# 1101155 failed pathoscope run.
+qc.lahey.batch.1 <- qc.lahey.batch.1[-7,]
+
+# rename the output_161019 samples
+qc.lahey.batch.1$Sample.Name[7] <- "01100959"
+qc.lahey.batch.1$Sample.Name[10] <- "01100526"
+qc.lahey.batch.1$Sample.Name[13] <- "01101096"
+qc.lahey.batch.1$Sample.Name[14] <- "01100481"
+qc.lahey.batch.1$Sample.Name[20] <- "01100813"
+
+
+#
+rownames(qc.lahey.batch.1) <- qc.lahey.batch.1$Sample.Name
+
+
+
+
+# Duplication rate
+lahey.b1.pass.qc.dup <- qc.lahey.batch.1$Sample.Name[which(qc.lahey.batch.1$Dups <= 70 & qc.lahey.batch.1$Dups >= 30)]
+
+# GC rate
+lahey.b1.pass.qc.gc <- qc.lahey.batch.1$Sample.Name[which(qc.lahey.batch.1$GC <= 55 & qc.lahey.batch.1$GC >= 45)]
+
+# M reads
+lahey.b1.pass.qc.mseq <-  qc.lahey.batch.1$Sample.Name[which(qc.lahey.batch.1$M.Seqs >= 20)]
+
+
+# Overlap
+lahey.b1.pass.qc <- Reduce(intersect, list(lahey.b1.pass.qc.dup, lahey.b1.pass.qc.gc, lahey.b1.pass.qc.mseq))
+
+# find samples that are nasal (in pdata) and also pass QC
+meta.lahey.batch.1 <- meta.lahey.batch.1[which(meta.lahey.batch.1$`Study ID` %in% lahey.b1.pass.qc),]
+
+# there is one file missing from pathostat: 01100340
+meta.lahey.batch.1 <- meta.lahey.batch.1[-8,]
+
+
+#write metaData file to the same folder as all tsv files
+meta.lahey.batch.1.small <- meta.lahey.batch.1[,c(4,9, 1:3, 5:8, 10:26)]
+write.table(meta.lahey.batch.1.small, file = "lahey/pulmseq/Lahey_batch_1//sample_data.tsv", sep = "\t")
+
+# start pathostat
+pstat.lahey.b1 <- createPathoStat(input_dir = "lahey/pulmseq/Lahey_batch_1/", sample_data_file = "sample_data.tsv")
+runPathoStat(pstat.lahey.b1)
+
+# download count file from pathostat
+
+count.species.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_species.csv", check.names = FALSE, stringsAsFactors = F)
+count.genus.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_genus.csv", check.names = FALSE, stringsAsFactors = F)
+count.family.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_family.csv", check.names = FALSE, stringsAsFactors = F)
+count.order.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_order.csv", check.names = FALSE, stringsAsFactors = F)
+count.phylum.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+count.class.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_class.csv", check.names = FALSE, stringsAsFactors = F)
+
+#add them all into a list
+count.list.lahey.b1 <- list(count.species.lahey.b1, count.genus.lahey.b1, count.family.lahey.b1, count.order.lahey.b1, count.class.lahey.b1, count.phylum.lahey.b1)
+names(count.list.lahey.b1) <- c("species", "genus", "family", "order", "class", "phylum")
+
+#list wise processing
+count.list.lahey.b1 <- lapply(count.list.lahey.b1, function(x) { rownames(x) <- x[,1] ;x})
+count.list.lahey.b1 <- lapply(count.list.lahey.b1, function(x) { x <- x[,-1] ;x})
+count.list.lahey.b1 <- lapply(count.list.lahey.b1, function(x) { colnames(x) <- gsub("\\.", "-", colnames(x)) ;x})
+count.list.lahey.b1 <- lapply(count.list.lahey.b1, function(x) { colnames(x) <- gsub("X", "", colnames(x)) ;x})
+
+#remove phix174
+count.list.lahey.b1 <- lapply(count.list.lahey.b1, function(x) { x <- x[which(sapply(rownames(x), function(y) regexpr("338116", y)) == -1),] ;x})
+
+
+#within sample normalization using log10-CPM
+count.list.lahey.b1.cpm <- lapply(count.list.lahey.b1, function(x) {x <- apply(as.matrix(x), 2, function(y) log10(y*1e6/sum(y) + 1) ); x })
+names(count.list.lahey.b1.cpm) <- c("species", "genus", "family", "order", "class", "phylum")
+
+
+
+###### RA
+
+
+ra.species.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_species.csv", check.names = FALSE, stringsAsFactors = F)
+ra.genus.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_genus.csv", check.names = FALSE, stringsAsFactors = F)
+ra.family.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_family.csv", check.names = FALSE, stringsAsFactors = F)
+ra.order.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_order.csv", check.names = FALSE, stringsAsFactors = F)
+ra.phylum.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+ra.class.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_class.csv", check.names = FALSE, stringsAsFactors = F)
+
+#add them all into a list
+ra.list.lahey.b1 <- list(ra.species.lahey.b1, ra.genus.lahey.b1, ra.family.lahey.b1, ra.order.lahey.b1, ra.class.lahey.b1, ra.phylum.lahey.b1)
+names(ra.list.lahey.b1) <- c("species", "genus", "family", "order", "class", "phylum")
+
+#list wise processing
+ra.list.lahey.b1 <- lapply(ra.list.lahey.b1, function(x) { rownames(x) <- x[,1] ;x})
+ra.list.lahey.b1 <- lapply(ra.list.lahey.b1, function(x) { x <- x[,-1] ;x})
+ra.list.lahey.b1 <- lapply(ra.list.lahey.b1, function(x) { colnames(x) <- gsub("\\.", "-", colnames(x)) ;x})
+ra.list.lahey.b1 <- lapply(ra.list.lahey.b1, function(x) { colnames(x) <- gsub("X", "", colnames(x)) ;x})
+
+#remove phix174
+ra.list.lahey.b1 <- lapply(ra.list.lahey.b1, function(x) { x <- x[which(sapply(rownames(x), function(y) regexpr("338116", y)) == -1),] ;x})
+
+# recalculate the RA
+ra.list.lahey.b1 <- lapply(ra.list.lahey.b1, function(x) {x <- apply(as.matrix(x), 2, function(y) y/sum(y) ); x })
+
+
+
+
+# plot total reads number, which is interesting: all LARGE number is not in control group
+colSums(count.list.lahey.b1[[2]])
+plot(colSums(count.list.lahey.b1[[2]]))
+
+# for jiarui
+write.csv(count.list.lahey.b1.cpm$species, "~/Desktop/lahey_species_count.csv")
+write.csv(ra.list.lahey.b1$species, "~/Desktop/lahey_species_RA.csv")
+
+#cancer
+cancer.lahey.b1 <- as.character(meta.lahey.batch.1$Status)
+cancer.lahey.b1.num <- cancer.lahey.b1
+cancer.lahey.b1.num[cancer.lahey.b1.num == "cancer"] <- 1
+cancer.lahey.b1.num[cancer.lahey.b1.num == "benign"] <- 0
+cancer.lahey.b1.num <- as.numeric(cancer.lahey.b1.num)
+
+# get different prevalence and RA
+pre.output.lahey.b1 <- Get_Prevalence(count.list.lahey.b1.cpm, cancer.lahey.b1.num, sum.cutoff = 0.1, fold.cutoff = 1.5)
+ra.output.lahey.b1 <- Get_RA(ra.list.lahey.b1, cancer.lahey.b1.num, fold.cutoff = 1.5, sum.cutoff = 0.03)
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#### Microbiome data load and process
+```{r message=FALSE, warning=FALSE}
+#metadata
+pData <- readRDS("data/pData_final.rds")
+
+#QC
+qc.decamp <- read.table("data/QC.txt", header = T, stringsAsFactors = F, sep = "\t")
+
+# Duplication rate
+sample.name.pass.qc.dup <- qc.decamp$Sample.Name[which(qc.decamp$Dups <= 60 & qc.decamp$Dups >= 30)]
+
+# GC rate
+sample.name.pass.qc.gc <- qc.decamp$Sample.Name[which(qc.decamp$GC <= 55 & qc.decamp$GC >= 45)]
+
+# M reads
+sample.name.pass.qc.mseq <-  qc.decamp$Sample.Name[which(qc.decamp$M.Seqs >= 20)]
+
+
+# Overlap
+sample.name.pass.qc <- Reduce(intersect, list(sample.name.pass.qc.dup, sample.name.pass.qc.gc, sample.name.pass.qc.mseq))
+
+#can't process DR-10, DR-12, DR-32, DR-46 on SCC
+# but they are already removed by QC step (not present in sample.name.pass.qc)
+
+# find samples that are nasal (in pdata) and also pass QC
+pData <- pData[which(pData$RNA.Sample.ID %in% sample.name.pass.qc),]
+
+# No highly degraded
+tmp <- as.character(pData$Comments.on.RNA.quality.and.yield)
+pData <- pData[!grepl(pattern = "highly", tmp),]
+
+# RIN filtering
+# remove NA values and wrong peak values, also, RIN > 3
+pData <- pData[-c(1,2,3,5,6,23,28,50),]
+
+
+#unify format and name
+pData$sex <- sapply(pData$sex, function(x) {if(x == 1){x <- "Male"}else{x <- "Female"};x})
+pData$Cancer.Status.Binary <- sapply(as.character(pData$BUcancer), function(x) {if(x != "Cancer"){x <- "Control"};x})
+
+
+#write metaData file to the same folder as all tsv files
+rownames(pData) <- pData$RNA.Sample.ID
+pData.small <- pData[,c(5,3,29,4,6,9,23)]
+write.table(pData.small, file = "./phix_filtered_tsv/tsv_report_new/sample_data.tsv", sep = "\t")
+
+# start pathostat
+par(mar = c(2,2,2,2))
+pstat1 <- 1
+pstat1 <- createPathoStat(input_dir = "./phix_filtered_tsv/tsv_report_new/", sample_data_file = "sample_data.tsv")
+runPathoStat(pstat1)
+
+# plot total reads number, which is interesting: all LARGE number is not in control group
+colSums(count_list[[2]])
+plot(colSums(count_list[[2]]))
+
+
+
+
+
+
+#get variables vecter
+cancerVec <- as.character(pData.small$Cancer.Status.Binary)
+
+cancerVecNum <- cancerVec
+cancerVecNum[cancerVecNum == "Cancer"] <- 1
+cancerVecNum[cancerVecNum == "Control"] <- 0
+cancerVecNum <- as.numeric(cancerVecNum)
+genderVec <- as.character(pData.small$sex)
+ageVec <- as.character(pData.small$age)
+pkyVec <- as.character(pData.small$PKyears)
+
+
+# download count file from pathostat
+
+count_species <- read.csv("data/pathostat_count_RA/sample_data_count_species.csv", check.names = FALSE, stringsAsFactors = F)
+count_genus <- read.csv("data/pathostat_count_RA/sample_data_count_genus.csv", check.names = FALSE, stringsAsFactors = F)
+count_family <- read.csv("data/pathostat_count_RA/sample_data_count_family.csv", check.names = FALSE, stringsAsFactors = F)
+count_order <- read.csv("data/pathostat_count_RA/sample_data_count_order.csv", check.names = FALSE, stringsAsFactors = F)
+count_phylum <- read.csv("data/pathostat_count_RA/sample_data_count_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+count_class <- read.csv("data/pathostat_count_RA/sample_data_count_class.csv", check.names = FALSE, stringsAsFactors = F)
+
+#add them all into a list
+count_list <- list(count_species, count_genus, count_family, count_order, count_class, count_phylum)
+names(count_list) <- c("species", "genus", "family", "order", "class", "phylum")
+
+#list wise processing
+count_list <- lapply(count_list, function(x) { rownames(x) <- x[,1] ;x})
+count_list <- lapply(count_list, function(x) { x <- x[,-1] ;x})
+count_list <- lapply(count_list, function(x) { colnames(x) <- gsub("\\.", "-", colnames(x)) ;x})
+count_list <- lapply(count_list, function(x) { colnames(x) <- gsub("X", "", colnames(x)) ;x})
+
+#remove phix174
+count_list <- lapply(count_list, function(x) { x <- x[which(sapply(rownames(x), function(y) regexpr("338116", y)) == -1),] ;x})
+
+#remove other
+#count_list <- lapply(count_list, function(x) { x <- x[which(sapply(rownames(x), function(y) regexpr("other", y)) == -1),] ;x})
+
+#within sample normalization using log10-CPM
+count_list.cpm <- lapply(count_list, function(x) {x <- apply(as.matrix(x), 2, function(y) log10(y*1e6/sum(y) + 1) ); x })
+names(count_list.cpm) <- c("species", "genus", "family", "order", "class", "phylum")
+
+
+
+###### RA
+
+
+ra.species <- read.csv("data/pathostat_count_RA/sample_data_species.csv", check.names = FALSE, stringsAsFactors = F)
+ra.genus <- read.csv("data/pathostat_count_RA/sample_data_genus.csv", check.names = FALSE, stringsAsFactors = F)
+ra.family <- read.csv("data/pathostat_count_RA/sample_data_family.csv", check.names = FALSE, stringsAsFactors = F)
+ra.order <- read.csv("data/pathostat_count_RA/sample_data_order.csv", check.names = FALSE, stringsAsFactors = F)
+ra.phylum <- read.csv("data/pathostat_count_RA/sample_data_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+ra.class <- read.csv("data/pathostat_count_RA/sample_data_class.csv", check.names = FALSE, stringsAsFactors = F)
+#add them all into a list
+ra.list <- list(ra.species, ra.genus, ra.family, ra.order, ra.class, ra.phylum)
+names(ra.list) <- c("species", "genus", "family", "order", "class", "phylum")
+
+#list wise processing
+ra.list <- lapply(ra.list, function(x) { rownames(x) <- x[,1] ;x})
+ra.list <- lapply(ra.list, function(x) { x <- x[,-1] ;x})
+ra.list <- lapply(ra.list, function(x) { colnames(x) <- gsub("\\.", "-", colnames(x)) ;x})
+ra.list <- lapply(ra.list, function(x) { colnames(x) <- gsub("X", "", colnames(x)) ;x})
+
+#remove phix174
+ra.list <- lapply(ra.list, function(x) { x <- x[which(sapply(rownames(x), function(y) regexpr("338116", y)) == -1),] ;x})
+
+# recalculate the RA
+ra.list <- lapply(ra.list, function(x) {x <- apply(as.matrix(x), 2, function(y) y/sum(y) ); x })
+
+
+
+```
+
+#### Human host gene expression
+```{r message=FALSE, warning=FALSE}
+########################################################################
+# host expression
+########################################################################
+
+#read 30-gene Joe's biomarker
+joe30gene <- read.table("data/30gene_hg19.txt", stringsAsFactors = F)
+joe30gene <- joe30gene$V1
+
+
+#read counts data
+counts78 <- read.table("data/decamp_nasal_counts.txt", header = T, stringsAsFactors = F, check.names = FALSE)
+counts.human <- counts78[,which(colnames(counts78) %in% rownames(pData.small))]
+
+
+#Max filter. 
+counts.human.filtered <- counts.human[which(apply(counts.human,1,max) >= 5),]
+
+#Normalization
+counts.human.norm <- deseq2_norm_rle(counts.human.filtered)
+
+
+#PCA
+plot_PCA_new(counts.human.norm, cancerVec, useLabel = T)
+
+
+```
+
+### PCA
+```{r}
+#outlier identification
+plot_PCA_new(count_list.cpm[[1]], cancerVec, title = "species level: PCA", useLabel = T)
+plot_PCA_new(count_list.cpm[[2]], cancerVec, title = "genus level: PCA", useLabel = T)
+plot_PCA_new(count_list.cpm[[3]], cancerVec, title = "family level: PCA", useLabel = T)
+plot_PCA_new(count_list.cpm[[4]], cancerVec, title = "order level: PCA", useLabel = T)
+plot_PCA_new(count_list.cpm[[5]], cancerVec, title = "class level: PCA", useLabel = T)
+plot_PCA_new(count_list.cpm[[6]], cancerVec, title = "phylum level: PCA", useLabel = T)
+```
+
+### Find prevalence and RA differences between cancer and control
+```{r}
+pre.output <- Get_Prevalence(count_list.cpm, cancerVecNum)
+ra.output <- Get_RA(ra.list, cancerVecNum, fold.cutoff = 1.5, sum.cutoff = 0.03)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### RF signatures in genus level
+```{r}
+signatureRF_df.genus <- featureSelectionRF(count_list.cpm[[3]], cancerVecNum, numRuns = 50, weirdSymbol = c("|", " "))
+#histogram(signatureRF_df$featureMeanDecreaseGiniVec)
+signatureRF.genus <- as.character(signatureRF_df.genus[signatureRF_df.genus$featureMeanDecreaseGiniVec > 1,]$featureName)
+plot_PCA_new(count_list.cpm[[3]][signatureRF.genus,], cancerVec, title = "genus level: PCA")
+
+```
+
+### RF signatures in family level
+```{r}
+signatureRF_df.family <- featureSelectionRF(count_list.cpm[[4]], cancerVecNum, numRuns = 50, weirdSymbol = c("|", " "))
+signatureRF.family <- as.character(signatureRF_df.family[signatureRF_df.family$featureMeanDecreaseGiniVec > 1,]$featureName)
+plot_PCA_new(count_list.cpm[[4]][signatureRF.family,], cancerVec, title = "family level: PCA")
+```
+
+### RF signatures in order level
+```{r}
+signatureRF_df.order <- featureSelectionRF(count_list.cpm[[5]], cancerVecNum, numRuns = 50, weirdSymbol = c("|", " "))
+signatureRF.order <- as.character(signatureRF_df.order[signatureRF_df.order$featureMeanDecreaseGiniVec > 1,]$featureName)
+plot_PCA_new(count_list.cpm[[5]][signatureRF.order,], cancerVec, title = "order level: PCA")
+```
+
+### RF signatures in class level
+```{r}
+signatureRF_df.class <- featureSelectionRF(count_list.cpm[[6]], cancerVecNum, numRuns = 50, weirdSymbol = c("|", " "))
+signatureRF.class <- as.character(signatureRF_df.class[signatureRF_df.class$featureMeanDecreaseGiniVec > 1,]$featureName)
+plot_PCA_new(count_list.cpm[[6]][signatureRF.class,], cancerVec, title = "class level: PCA")
+```
+
+
+### beta diversity
+```{r}
+comm <- as.data.frame(t(as.matrix(count_list.cpm[[1]])))
+groups <- factor(c(1, 2, rep(1,41), rep(2,28)), labels = c("Cancer","Control"))
+presabs <- ifelse(comm>0,1,0)
+dist <- beta.pair(presabs, index.family="jaccard")
+bd<-betadisper(dist[[3]],groups)
+plot(bd)
+boxplot(bd)
+anova(bd)
+
+
+
+```
+
+
+
+
+
+
+
+
+
+### CV using ridge regression with microbiome, 30 gene, 30 gene + microbiome
+```{r}
+
+#LOOCV for joe 30 gene
+set.seed(10)
+joe30.auc.LOO <- LOOAUC_simple_multiple(list(counts71_filtered[joe30gene,]), cancerVec, c("joe30"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+#LOOCV for microbiome genus RF signatures
+genus.rf.auc.LOO <- LOOAUC_simple_multiple(list(count_list.cpm[[3]][signatureRF.genus,]), cancerVec, c("rf.genus"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+#LOOCV for microbiome family RF signatures
+family.rf.auc.LOO <- LOOAUC_simple_multiple(list(count_list.cpm[[4]][signatureRF.family,]), cancerVec, c("rf.family"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+#LOOCV for joe 30 gene + microbiome genus RF signatures
+ds.host.genus <- rbind(counts71_filtered[joe30gene,], count_list.cpm[[3]][signatureRF.genus,])
+joe30.genus.rf.auc.LOO <- LOOAUC_simple_multiple(list(ds.host.genus), cancerVec, c("joe30.rf.genus"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+#LOOCV for joe 30 gene + microbiome family RF signatures
+ds.host.family <- rbind(counts71_filtered[joe30gene,], count_list.cpm[[4]][signatureRF.family,])
+joe30.family.rf.auc.LOO <- LOOAUC_simple_multiple(list(ds.host.family), cancerVec, c("joe30.rf.family"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+
+#LOOCV for joe 30 gene + microbiome order RF signatures
+ds.host.order <- rbind(counts71_filtered[joe30gene,], count_list.cpm[[5]][signatureRF.order,])
+joe30.order.rf.auc.LOO <- LOOAUC_simple_multiple(list(ds.host.order), cancerVec, c("joe30.rf.order"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+
+
+
+```
+
+
+
+### clinicogenomic classifier (CLG)
+```{r}
+#LOOCV for joe 30 gene
+set.seed(10)
+
+ds.joe.cli <- rbind(counts71_filtered[joe30gene,], genderVecNum, ageVecNum, pkyVecNum)
+joe30.auc.LOO <- LOOAUC_simple_multiple(list(ds.joe.cli), cancerVec, c("joe30.cli"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+#LOOCV for joe 30 gene + microbiome genus RF signatures
+ds.genus.rf.cli <- rbind(count_list.cpm[[3]][signatureRF.genus,], genderVecNum, ageVecNum, pkyVecNum)
+genus.rf.auc.LOO <- LOOAUC_simple_multiple(list(ds.genus.rf.cli), cancerVec, c("rf.genus.cli"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+
+#LOOCV for joe 30 gene + microbiome genus RF signatures
+ds.host.genus.cli <- rbind(counts71_filtered[joe30gene,], count_list.cpm[[3]][signatureRF.genus,],genderVecNum, ageVecNum, pkyVecNum)
+joe30.genus.rf.auc.LOO <- LOOAUC_simple_multiple(list(ds.host.genus.cli), cancerVec, c("joe30.rf.genus.cli"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+#LOOCV for joe 30 gene + microbiome family RF signatures
+ds.host.family.cli <- rbind(counts71_filtered[joe30gene,], count_list.cpm[[4]][signatureRF.family,],genderVecNum, ageVecNum, pkyVecNum)
+joe30.family.rf.auc.LOO <- LOOAUC_simple_multiple(list(ds.host.family.cli), cancerVec, c("joe30.rf.family.cli"), xLegendLocation = 0.3, yLegendLocation = 0.2)
+
+
+```
+
+
+
+
+### Derive new signature genes for Decamp Nasal
+```{r}
+decampSignature <- getSignatureFromMultipleGlmnet(counts78_filtered_norm, cancerVecBinaryNum,nfolds = 6,logisticRegression = TRUE)
+
+#decamp 22 + clinical
+ds_new1 <- rbind(counts78_filtered_norm[decampSignature,], ageVecNum, genderVecNum, pkyVecNum)
+ds_new1_auc <- CV_Glmnet_ridge(ds_new1, cancerVecBinaryNum, logisticRegression = TRUE, nSample = 100, nfolds = 4, nCV = 5)
+ds_new1_cor <- CV_Glmnet_ridge(ds_new1, cancerVecBinaryNum, logisticRegression = TRUE, nSample = 100, nfolds = 4, nCV = 5, useAUC = FALSE, useProbPearson = TRUE)
+ds_new1_acc <- CV_Glmnet_ridge(ds_new1, cancerVecBinaryNum, logisticRegression = TRUE, nSample = 100, nfolds = 4, nCV = 5, useAUC = FALSE, useHamming = TRUE)
+
+
+#decamp 22 + clinical + micro
+ds_new2 <- rbind(counts78_filtered_norm[decampSignature,], count_no_rank_raw[signatureCount,], ageVecNum, genderVecNum, pkyVecNum)
+ds_new2_auc <- CV_Glmnet_ridge(ds_new2, cancerVecBinaryNum, logisticRegression = TRUE, nSample = 100, nfolds = 4, nCV = 5)
+ds_new2_cor <- CV_Glmnet_ridge(ds_new2, cancerVecBinaryNum, logisticRegression = TRUE, nSample = 100, nfolds = 4, nCV = 5, useAUC = FALSE, useProbPearson = TRUE)
+ds_new2_acc <- CV_Glmnet_ridge(ds_new2, cancerVecBinaryNum, logisticRegression = TRUE, nSample = 100, nfolds = 4, nCV = 5, useAUC = FALSE, useHamming = TRUE)
+
+
+
+
+```
+
+
+```{r}
+resultJoe <- c(mean(joe30_acc), mean(joe30_auc), mean(joe30_cor))
+resultJoeFBHRN <- c(mean(signatureFBHRN_log10_joe30_acc), mean(signatureFBHRN_log10_joe30_auc), mean(signatureFBHRN_log10_joe30_cor))
+resultJoeFBHRN_filtered <- c(mean(signatureFBHRN_filtered_log10_joe30_acc), mean(signatureFBHRN_filtered_log10_joe30_auc), mean(signatureFBHRN_filtered_log10_joe30_cor))
+resultJoePathoCounts <- c(mean(signatureCount_joe30_acc), mean(signatureCount_joe30_auc), mean(signatureCount_joe30_cor))
+
+comparisonResult <- data.frame(resultJoe, resultJoeFBHRN, resultJoeFBHRN_filtered, resultJoePathoCounts)
+
+rownames(comparisonResult) <- c("ACC", "AUC", "COR")
+
+
+```
+
+
+
+
+```{r}
+boxplot(joe30_auc, signatureCount_joe30_auc, main = "AUC comparison", names = c("Joe 30-gene", "Joe 30-gene + Microbiome"))
+boxplot(joe30_acc, signatureCount_joe30_acc, main = "ACC comparison", names = c("Joe 30-gene", "Joe 30-gene + Microbiome"))
+boxplot(joe30_cor, signatureCount_joe30_cor, main = "COR comparison", names = c("Joe 30-gene", "Joe 30-gene + Microbiome"))
+
+
+```
+
+
+
