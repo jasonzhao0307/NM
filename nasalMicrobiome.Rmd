@@ -4,6 +4,19 @@ output: html_notebook
 author: Yue Zhao
 ---
 
+#### Load Name.RData
+```{r}
+# All data and .RData are stored outside of this github folder.
+# Skip thsi step if run for the first time
+load("../NM.RData")
+
+# Also, before leaving the current environment, do:
+# save.image("../NM.RData")
+
+```
+
+
+
 #### packages
 ```{r message=FALSE}
 #load packages
@@ -69,11 +82,11 @@ Chisq_Test_List <- function(df.list, label.vec.num){
 
 # Prevalence
 Get_Prevalence <- function(count.list, label.num.vec, sum.cutoff = 0.1, fold.cutoff = 1.5){
-  pre.list.cancer <- lapply(count.list, function(y) 
-    apply(as.matrix(y), 1, function(x) 
+  pre.list.cancer <- lapply(count.list, function(y)
+    apply(as.matrix(y), 1, function(x)
       round(sum(x[which(label.num.vec == 1)] != 0)/sum(label.num.vec == 1), 2)))
-  pre.list.control <- lapply(count.list, function(y) 
-    apply(as.matrix(y), 1, function(x) 
+  pre.list.control <- lapply(count.list, function(y)
+    apply(as.matrix(y), 1, function(x)
       round(sum(x[which(label.num.vec == 0)] != 0)/sum(label.num.vec == 0), 2)))
   pre.list <- list()
   for (i in 1:length(pre.list.cancer)){
@@ -99,11 +112,11 @@ Get_Prevalence <- function(count.list, label.num.vec, sum.cutoff = 0.1, fold.cut
 
 # Mean Relative Abundance
 Get_RA <- function(ra.list, label.num.vec, sum.cutoff = 0.01, fold.cutoff = 1.5){
-  pre.list.cancer <- lapply(ra.list, function(y) 
-    apply(as.matrix(y), 1, function(x) 
+  pre.list.cancer <- lapply(ra.list, function(y)
+    apply(as.matrix(y), 1, function(x)
       round(sum(x[which(label.num.vec == 1)]),2) / sum(label.num.vec == 1)))
-  pre.list.control <- lapply(ra.list, function(y) 
-    apply(as.matrix(y), 1, function(x) 
+  pre.list.control <- lapply(ra.list, function(y)
+    apply(as.matrix(y), 1, function(x)
       round(sum(x[which(label.num.vec == 0)]),2) / sum(label.num.vec == 0)))
   pre.list <- list()
   for (i in 1:length(pre.list.cancer)){
@@ -175,14 +188,14 @@ GetDEG <- function(de.result, padj.cut.off = 1e-2){
 Note: This batch is in output_161007
 ```{r}
 #metadata
-meta.lahey.batch.1 <- read.table("lahey/data/Clinical_Nasal.txt", sep = "\t", stringsAsFactors = F)
+meta.lahey.batch.1 <- read.table("../data/lahey/data/Clinical_Nasal.txt", sep = "\t", stringsAsFactors = F)
 colnames(meta.lahey.batch.1) <- meta.lahey.batch.1[1,]
 meta.lahey.batch.1 <- meta.lahey.batch.1[2:39,1:26]
 rownames(meta.lahey.batch.1) <- meta.lahey.batch.1$`Study ID`
 
 
 #QC
-qc.lahey.batch.1 <- read.table("lahey/data/QC_lahey.txt", header = T, stringsAsFactors = F, sep = "\t")
+qc.lahey.batch.1 <- read.table("../data/lahey/data/QC_lahey.txt", header = T, stringsAsFactors = F, sep = "\t")
 colnames(qc.lahey.batch.1) <- c("Sample.Name", "Dups", "GC", "M.Seqs")
 qc.lahey.batch.1$Sample.Name <- str_match(qc.lahey.batch.1$Sample.Name, "([0-9]+)_")[,2]
 
@@ -225,20 +238,20 @@ meta.lahey.batch.1 <- meta.lahey.batch.1[-8,]
 
 #write metaData file to the same folder as all tsv files
 meta.lahey.batch.1.small <- meta.lahey.batch.1[,c(4,9, 1:3, 5:8, 10:26)]
-write.table(meta.lahey.batch.1.small, file = "lahey/pulmseq/Lahey_batch_1//sample_data.tsv", sep = "\t")
+write.table(meta.lahey.batch.1.small, file = "../data/lahey/pulmseq/Lahey_batch_1/sample_data.tsv", sep = "\t")
 
 # start pathostat
-pstat.lahey.b1 <- createPathoStat(input_dir = "lahey/pulmseq/Lahey_batch_1/", sample_data_file = "sample_data.tsv")
+pstat.lahey.b1 <- createPathoStat(input_dir = "../data/lahey/pulmseq/Lahey_batch_1/", sample_data_file = "sample_data.tsv")
 runPathoStat(pstat.lahey.b1)
 
 # download count file from pathostat
 
-count.species.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_species.csv", check.names = FALSE, stringsAsFactors = F)
-count.genus.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_genus.csv", check.names = FALSE, stringsAsFactors = F)
-count.family.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_family.csv", check.names = FALSE, stringsAsFactors = F)
-count.order.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_order.csv", check.names = FALSE, stringsAsFactors = F)
-count.phylum.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_phylum.csv", check.names = FALSE, stringsAsFactors = F)
-count.class.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_count_class.csv", check.names = FALSE, stringsAsFactors = F)
+count.species.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_count_species.csv", check.names = FALSE, stringsAsFactors = F)
+count.genus.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_count_genus.csv", check.names = FALSE, stringsAsFactors = F)
+count.family.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_count_family.csv", check.names = FALSE, stringsAsFactors = F)
+count.order.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_count_order.csv", check.names = FALSE, stringsAsFactors = F)
+count.phylum.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_count_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+count.class.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_count_class.csv", check.names = FALSE, stringsAsFactors = F)
 
 #add them all into a list
 count.list.lahey.b1 <- list(count.species.lahey.b1, count.genus.lahey.b1, count.family.lahey.b1, count.order.lahey.b1, count.class.lahey.b1, count.phylum.lahey.b1)
@@ -263,12 +276,12 @@ names(count.list.lahey.b1.cpm) <- c("species", "genus", "family", "order", "clas
 ###### RA
 
 
-ra.species.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_species.csv", check.names = FALSE, stringsAsFactors = F)
-ra.genus.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_genus.csv", check.names = FALSE, stringsAsFactors = F)
-ra.family.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_family.csv", check.names = FALSE, stringsAsFactors = F)
-ra.order.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_order.csv", check.names = FALSE, stringsAsFactors = F)
-ra.phylum.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_phylum.csv", check.names = FALSE, stringsAsFactors = F)
-ra.class.lahey.b1 <- read.csv("lahey/data/pathostat_output/sample_data_class.csv", check.names = FALSE, stringsAsFactors = F)
+ra.species.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_species.csv", check.names = FALSE, stringsAsFactors = F)
+ra.genus.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_genus.csv", check.names = FALSE, stringsAsFactors = F)
+ra.family.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_family.csv", check.names = FALSE, stringsAsFactors = F)
+ra.order.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_order.csv", check.names = FALSE, stringsAsFactors = F)
+ra.phylum.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+ra.class.lahey.b1 <- read.csv("../data/lahey/data/pathostat_output/sample_data_class.csv", check.names = FALSE, stringsAsFactors = F)
 
 #add them all into a list
 ra.list.lahey.b1 <- list(ra.species.lahey.b1, ra.genus.lahey.b1, ra.family.lahey.b1, ra.order.lahey.b1, ra.class.lahey.b1, ra.phylum.lahey.b1)
@@ -330,10 +343,10 @@ ra.output.lahey.b1 <- Get_RA(ra.list.lahey.b1, cancer.lahey.b1.num, fold.cutoff 
 #### Microbiome data load and process
 ```{r message=FALSE, warning=FALSE}
 #metadata
-pData <- readRDS("data/pData_final.rds")
+pData <- readRDS("../data/pData_final.rds")
 
 #QC
-qc.decamp <- read.table("data/QC.txt", header = T, stringsAsFactors = F, sep = "\t")
+qc.decamp <- read.table("../data/QC.txt", header = T, stringsAsFactors = F, sep = "\t")
 
 # Duplication rate
 sample.name.pass.qc.dup <- qc.decamp$Sample.Name[which(qc.decamp$Dups <= 60 & qc.decamp$Dups >= 30)]
@@ -371,12 +384,12 @@ pData$Cancer.Status.Binary <- sapply(as.character(pData$BUcancer), function(x) {
 #write metaData file to the same folder as all tsv files
 rownames(pData) <- pData$RNA.Sample.ID
 pData.small <- pData[,c(5,3,29,4,6,9,23)]
-write.table(pData.small, file = "./phix_filtered_tsv/tsv_report_new/sample_data.tsv", sep = "\t")
+write.table(pData.small, file = "../data/phix_filtered_tsv/tsv_report_new/sample_data.tsv", sep = "\t")
 
 # start pathostat
 par(mar = c(2,2,2,2))
 pstat1 <- 1
-pstat1 <- createPathoStat(input_dir = "./phix_filtered_tsv/tsv_report_new/", sample_data_file = "sample_data.tsv")
+pstat1 <- createPathoStat(input_dir = "../data/phix_filtered_tsv/tsv_report_new/", sample_data_file = "sample_data.tsv")
 runPathoStat(pstat1)
 
 # plot total reads number, which is interesting: all LARGE number is not in control group
@@ -402,12 +415,12 @@ pkyVec <- as.character(pData.small$PKyears)
 
 # download count file from pathostat
 
-count_species <- read.csv("data/pathostat_count_RA/sample_data_count_species.csv", check.names = FALSE, stringsAsFactors = F)
-count_genus <- read.csv("data/pathostat_count_RA/sample_data_count_genus.csv", check.names = FALSE, stringsAsFactors = F)
-count_family <- read.csv("data/pathostat_count_RA/sample_data_count_family.csv", check.names = FALSE, stringsAsFactors = F)
-count_order <- read.csv("data/pathostat_count_RA/sample_data_count_order.csv", check.names = FALSE, stringsAsFactors = F)
-count_phylum <- read.csv("data/pathostat_count_RA/sample_data_count_phylum.csv", check.names = FALSE, stringsAsFactors = F)
-count_class <- read.csv("data/pathostat_count_RA/sample_data_count_class.csv", check.names = FALSE, stringsAsFactors = F)
+count_species <- read.csv("../data/pathostat_count_RA/sample_data_count_species.csv", check.names = FALSE, stringsAsFactors = F)
+count_genus <- read.csv("../data/pathostat_count_RA/sample_data_count_genus.csv", check.names = FALSE, stringsAsFactors = F)
+count_family <- read.csv("../data/pathostat_count_RA/sample_data_count_family.csv", check.names = FALSE, stringsAsFactors = F)
+count_order <- read.csv("../data/pathostat_count_RA/sample_data_count_order.csv", check.names = FALSE, stringsAsFactors = F)
+count_phylum <- read.csv("../data/pathostat_count_RA/sample_data_count_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+count_class <- read.csv("../data/pathostat_count_RA/sample_data_count_class.csv", check.names = FALSE, stringsAsFactors = F)
 
 #add them all into a list
 count_list <- list(count_species, count_genus, count_family, count_order, count_class, count_phylum)
@@ -434,12 +447,12 @@ names(count_list.cpm) <- c("species", "genus", "family", "order", "class", "phyl
 ###### RA
 
 
-ra.species <- read.csv("data/pathostat_count_RA/sample_data_species.csv", check.names = FALSE, stringsAsFactors = F)
-ra.genus <- read.csv("data/pathostat_count_RA/sample_data_genus.csv", check.names = FALSE, stringsAsFactors = F)
-ra.family <- read.csv("data/pathostat_count_RA/sample_data_family.csv", check.names = FALSE, stringsAsFactors = F)
-ra.order <- read.csv("data/pathostat_count_RA/sample_data_order.csv", check.names = FALSE, stringsAsFactors = F)
-ra.phylum <- read.csv("data/pathostat_count_RA/sample_data_phylum.csv", check.names = FALSE, stringsAsFactors = F)
-ra.class <- read.csv("data/pathostat_count_RA/sample_data_class.csv", check.names = FALSE, stringsAsFactors = F)
+ra.species <- read.csv("../data/pathostat_count_RA/sample_data_species.csv", check.names = FALSE, stringsAsFactors = F)
+ra.genus <- read.csv("../data/pathostat_count_RA/sample_data_genus.csv", check.names = FALSE, stringsAsFactors = F)
+ra.family <- read.csv("../data/pathostat_count_RA/sample_data_family.csv", check.names = FALSE, stringsAsFactors = F)
+ra.order <- read.csv("../data/pathostat_count_RA/sample_data_order.csv", check.names = FALSE, stringsAsFactors = F)
+ra.phylum <- read.csv("../data/pathostat_count_RA/sample_data_phylum.csv", check.names = FALSE, stringsAsFactors = F)
+ra.class <- read.csv("../data/pathostat_count_RA/sample_data_class.csv", check.names = FALSE, stringsAsFactors = F)
 #add them all into a list
 ra.list <- list(ra.species, ra.genus, ra.family, ra.order, ra.class, ra.phylum)
 names(ra.list) <- c("species", "genus", "family", "order", "class", "phylum")
@@ -467,16 +480,16 @@ ra.list <- lapply(ra.list, function(x) {x <- apply(as.matrix(x), 2, function(y) 
 ########################################################################
 
 #read 30-gene Joe's biomarker
-joe30gene <- read.table("data/30gene_hg19.txt", stringsAsFactors = F)
+joe30gene <- read.table("../data/30gene_hg19.txt", stringsAsFactors = F)
 joe30gene <- joe30gene$V1
 
 
 #read counts data
-counts78 <- read.table("data/decamp_nasal_counts.txt", header = T, stringsAsFactors = F, check.names = FALSE)
+counts78 <- read.table("../data/decamp_nasal_counts.txt", header = T, stringsAsFactors = F, check.names = FALSE)
 counts.human <- counts78[,which(colnames(counts78) %in% rownames(pData.small))]
 
 
-#Max filter. 
+#Max filter.
 counts.human.filtered <- counts.human[which(apply(counts.human,1,max) >= 5),]
 
 #Normalization
@@ -680,6 +693,3 @@ boxplot(joe30_cor, signatureCount_joe30_cor, main = "COR comparison", names = c(
 
 
 ```
-
-
-
